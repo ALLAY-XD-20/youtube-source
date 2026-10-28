@@ -252,7 +252,12 @@ public abstract class NonMusicClient implements Client {
             .values()
             .stream()
             .flatMap(item -> item.get("itemSectionRenderer").get("contents").values().stream())
-            .map(item -> extractAudioTrack(item.get("compactVideoRenderer"), source))
+            .map(item -> {
+                JsonBrowser video = !item.get("compactVideoRenderer").isNull()
+                    ? item.get("compactVideoRenderer")
+                    : item.get("videoRenderer");
+                return extractAudioTrack(video, source);
+            })
             .filter(Objects::nonNull)
             .collect(Collectors.toList());
     }
@@ -384,30 +389,99 @@ public abstract class NonMusicClient implements Client {
     @Nullable
     protected AudioTrack extractAudioTrack(@NotNull JsonBrowser json,
                                            @NotNull YoutubeAudioSourceManager source) {
-        // this entire function needs redoing. Ideally being able to specify the paths of known JSON layouts
-        // rather than doing a load of null checks and substitutions.
-
-        // Ignore if it's not a track or if it's a livestream
-        if (json.isNull() || json.get("lengthText").isNull() || !json.get("unplayableText").isNull()) return null;
-
-        String videoId = json.get("videoId").text();
-        JsonBrowser titleJson = !json.get("headline").isNull() ? json.get("headline") : json.get("title");
-        String title = DataFormatTools.defaultOnNull(titleJson.get("runs").index(0).get("text").text(), titleJson.get("simpleText").text());
-        String author = DataFormatTools.defaultOnNull(
-            json.get("longBylineText").get("runs").index(0).get("text").text(),
-            json.get("shortBylineText").get("runs").index(0).get("text").text()
-        );
-
-        if (author == null) {
-            log.debug("Author field is null, client: {}, json: {}", getIdentifier(), json.format());
-            author = "Unknown artist";
+        if (json == null || json.isNull() || !json.get("unplayableText").isNull()) {
+            return null;
         }
 
-        JsonBrowser durationJson = json.get("lengthText");
-        String durationText = DataFormatTools.defaultOnNull(durationJson.get("runs").index(0).get("text").text(), durationJson.get("simpleText").text());
+        try {
+            String videoId = json.get("videoId").text();
+            if (videoId == null) {
+                videoId = json.get("navigationEndpoint").get("watchEndpoint").get("videoId").text();
+            }
 
-        long duration = DataFormatTools.durationTextToMillis(durationText);
-        return buildAudioTrack(source, json, title, author, duration, videoId, false);
+            if (videoId == null) {
+                return null;
+            }
+
+            JsonBrowser titleJson = !json.get("headline").isNull() ? json.get("headline") : json.get("title");
+            String title = DataFormatTools.defaultOnNull(
+                titleJson.get("runs").index(0).get("text").text(),
+                titleJson.get("simpleText").text()
+            );
+
+            String author = DataFormatTools.defaultOnNull(
+                json.get("longBylineText").get("runs").index(0).get("text").text(),
+                json.get("shortBylineText").get("runs").index(0).get("text").text()
+            );
+
+            if (author == null) {
+                author = "Unknown artist";
+            }
+
+            boolean isStream = false;
+            long duration = Units.DURATION_MS_UNKNOWN;
+
+            // Check badges for live stream
+            JsonBrowser badges = json.get("badges");
+            if (!badges.isNull() && badges.isList()) {
+                for (JsonBrowser badge : badges.values()) {
+                    JsonBrowser badgeRenderer = badge.get("metadataBadgeRenderer");
+                    String style = badgeRenderer.get("style").text();
+                    String label = badgeRenderer.get("label").text();
+                    if ("BADGE_STYLE_TYPE_LIVE_NOW".equalsIgnoreCase(style) || "LIVE".equalsIgnoreCase(label)) {
+                        isStream = true;
+                        break;
+                    }
+                }
+            }
+
+            // Extract duration from lengthText if available
+            JsonBrowser durationJson = json.get("lengthText");
+            String durationText = null;
+            if (!durationJson.isNull()) {
+                durationText = DataFormatTools.defaultOnNull(
+                    durationJson.get("runs").index(0).get("text").text(),
+                    durationJson.get("simpleText").text()
+                );
+            }
+
+            // Fallback: check thumbnailOverlays
+            if (durationText == null && !isStream) {
+                JsonBrowser overlays = json.get("thumbnailOverlays");
+                if (!overlays.isNull() && overlays.isList()) {
+                    for (JsonBrowser overlay : overlays.values()) {
+                        JsonBrowser timeStatus = overlay.get("thumbnailOverlayTimeStatusRenderer");
+                        if (!timeStatus.isNull()) {
+                            String style = timeStatus.get("style").text();
+                            if ("LIVE".equalsIgnoreCase(style)) {
+                                isStream = true;
+                                break;
+                            }
+                            JsonBrowser textObj = timeStatus.get("text");
+                            durationText = DataFormatTools.defaultOnNull(
+                                textObj.get("simpleText").text(),
+                                textObj.get("runs").index(0).get("text").text()
+                            );
+                            if (durationText != null) {
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (!isStream) {
+                if (durationText == null) {
+                    return null;
+                }
+                duration = DataFormatTools.durationTextToMillis(durationText);
+            }
+
+            return buildAudioTrack(source, json, title, author, duration, videoId, isStream);
+        } catch (Exception e) {
+            log.debug("Failed to extract audio track from search item: {}", e.getMessage());
+            return null;
+        }
     }
     //</editor-fold>
 
