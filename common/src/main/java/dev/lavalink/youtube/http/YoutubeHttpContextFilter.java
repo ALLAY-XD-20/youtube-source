@@ -1,0 +1,174 @@
+package dev.lavalink.youtube.http;
+
+import com.sedmelluq.discord.lavaplayer.tools.http.HttpContextRetryCounter;
+import com.sedmelluq.discord.lavaplayer.tools.io.HttpClientTools;
+import com.sedmelluq.discord.lavaplayer.tools.DataFormatTools;
+import dev.lavalink.youtube.clients.skeleton.Client;
+import org.apache.http.HttpResponse;
+import org.apache.http.client.CookieStore;
+import org.apache.http.client.methods.HttpUriRequest;
+import org.apache.http.client.protocol.HttpClientContext;
+import org.apache.http.impl.client.BasicCookieStore;
+import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import static dev.lavalink.youtube.http.YoutubeOauth2Handler.OAUTH_INJECT_CONTEXT_ATTRIBUTE;
+
+public class YoutubeHttpContextFilter extends BaseYoutubeHttpContextFilter {
+  private static final Logger log = LoggerFactory.getLogger(YoutubeHttpContextFilter.class);
+
+  private static final String ATTRIBUTE_RESET_RETRY = "isResetRetry";
+  public static final String ATTRIBUTE_USER_AGENT_SPECIFIED = "clientUserAgent";
+  public static final String ATTRIBUTE_VISITOR_DATA_SPECIFIED = "clientVisitorData";
+  public static final String ATTRIBUTE_CIPHER_REQUEST_SPECIFIED = "remoteCipherRequest";
+
+  private static final HttpContextRetryCounter retryCounter = new HttpContextRetryCounter("yt-token-retry");
+
+  private YoutubeAccessTokenTracker tokenTracker;
+  private YoutubeOauth2Handler oauth2Handler;
+
+  private String remoteCipherPass;
+  private String remoteCipherUserAgent;
+  private String pluginVersion;
+
+  public void setTokenTracker(@NotNull YoutubeAccessTokenTracker tokenTracker) {
+    this.tokenTracker = tokenTracker;
+  }
+
+  public void setOauth2Handler(@NotNull YoutubeOauth2Handler oauth2Handler) {
+    this.oauth2Handler = oauth2Handler;
+  }
+
+  public void setCipherConfig(@Nullable String remotePass,
+                              @Nullable String userAgent,
+                              @NotNull String pluginVersion) {
+    this.remoteCipherPass = remotePass;
+    this.remoteCipherUserAgent = userAgent;
+    this.pluginVersion = pluginVersion;
+  }
+
+
+  @Override
+  public void onContextOpen(HttpClientContext context) {
+    CookieStore cookieStore = context.getCookieStore();
+
+    if (cookieStore == null) {
+      cookieStore = new BasicCookieStore();
+      context.setCookieStore(cookieStore);
+    }
+
+    // Reset cookies for each sequence of requests.
+    cookieStore.clear();
+  }
+
+  @Override
+  public void onRequest(HttpClientContext context,
+                        HttpUriRequest request,
+                        boolean isRepetition) {
+    if (!isRepetition) {
+      context.removeAttribute(ATTRIBUTE_RESET_RETRY);
+    }
+
+    retryCounter.handleUpdate(context, isRepetition);
+
+    if (tokenTracker.isTokenFetchContext(context)) {
+      // Used for fetching visitor id, let's not recurse.
+      return;
+    }
+
+    if (oauth2Handler.isOauthFetchContext(context)) {
+      return;
+    }
+
+    String userAgent = context.getAttribute(ATTRIBUTE_USER_AGENT_SPECIFIED, String.class);
+
+    if (isRemoteCipherRequest(context)) {
+      if (!DataFormatTools.isNullOrEmpty(remoteCipherPass)) {
+        request.addHeader("Authorization", remoteCipherPass);
+      }
+
+      if (!DataFormatTools.isNullOrEmpty(remoteCipherUserAgent)) {
+        request.addHeader("User-Agent", remoteCipherUserAgent);
+      }
+
+      request.addHeader("Plugin-Version", pluginVersion);
+    } else if (!request.getURI().getHost().contains("googlevideo")) {
+      if (userAgent != null) {
+        request.setHeader("User-Agent", userAgent);
+
+        String visitorData = context.getAttribute(ATTRIBUTE_VISITOR_DATA_SPECIFIED, String.class);
+        request.setHeader("X-Goog-Visitor-Id", visitorData != null ? visitorData : tokenTracker.getVisitorId());
+
+        context.removeAttribute(ATTRIBUTE_VISITOR_DATA_SPECIFIED);
+        context.removeAttribute(ATTRIBUTE_USER_AGENT_SPECIFIED);
+      }
+
+      // fix: getAttribute is needed over removeAttribute as this renders subsequent requests where oauth is
+      //      required useless, because the attribute has already been removed.
+      boolean isRequestFromOauthedClient = context.getAttribute(Client.OAUTH_CLIENT_ATTRIBUTE) == Boolean.TRUE;
+
+      if (isRequestFromOauthedClient && Client.PLAYER_URL.equals(request.getURI().toString())) {
+        // Look at the userdata for any provided oauth-token
+        String oauthToken = context.getAttribute(OAUTH_INJECT_CONTEXT_ATTRIBUTE, String.class);
+        // only apply the token to /player requests.
+        if (oauthToken != null && !oauthToken.isEmpty()) {
+          oauth2Handler.applyToken(request, oauthToken);
+        } else {
+          oauth2Handler.applyToken(request);
+        }
+
+        // complements above fix, ensure we consume this attribute when we use it to ensure it doesn't leak
+        // over into requests from non-oauth clients. This might be a dirty fix because this is assuming the
+        // context this attribute is attached, always hits the player endpoint once. May need to revise this
+        // in the future.
+        context.removeAttribute(Client.OAUTH_CLIENT_ATTRIBUTE);
+      }
+    }
+
+//    try {
+//      URI uri = new URIBuilder(request.getURI())
+//          .setParameter("key", YoutubeConstants.INNERTUBE_ANDROID_API_KEY)
+//          .build();
+//
+//      if (request instanceof HttpRequestBase) {
+//        ((HttpRequestBase) request).setURI(uri);
+//      } else {
+//        throw new IllegalStateException("Cannot update request URI.");
+//      }
+//    } catch (URISyntaxException e) {
+//      throw new RuntimeException(e);
+//    }
+  }
+
+  @Override
+  public boolean onRequestResponse(HttpClientContext context,
+                                   HttpUriRequest request,
+                                   HttpResponse response) {
+
+//    if (tokenTracker.isTokenFetchContext(context) || retryCounter.getRetryCount(context) >= 1) {
+//      return false;
+//    }
+    return false;
+  }
+
+  @Override
+  public boolean onRequestException(HttpClientContext context,
+                                    HttpUriRequest request,
+                                    Throwable error) {
+    // Always retry once in case of connection reset exception.
+    if (HttpClientTools.isConnectionResetException(error)) {
+      if (context.getAttribute(ATTRIBUTE_RESET_RETRY) == null) {
+        context.setAttribute(ATTRIBUTE_RESET_RETRY, true);
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  private boolean isRemoteCipherRequest(HttpClientContext context) {
+    return context.removeAttribute(ATTRIBUTE_CIPHER_REQUEST_SPECIFIED) == Boolean.TRUE;
+  }
+}
