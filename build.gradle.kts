@@ -59,20 +59,16 @@ subprojects {
 
 @SuppressWarnings("GrMethodMayBeStatic")
 fun versionFromGit(): Pair<String, Boolean> {
-    try {
-        Grgit.open(mapOf("currentDir" to project.rootDir)).use { git ->
-            val headTag = git.tag
-                .list()
-                .find { it.commit.id == git.head().id }
+    Grgit.open(mapOf("currentDir" to project.rootDir)).use { git ->
+        val headTag = git.tag
+            .list()
+            .find { it.commit.id == git.head().id }
 
-            val clean = git.status().isClean || System.getenv("CI") != null
-            if (headTag != null) {
-                return headTag.name to true
-            }
-
-            return if (clean) "1.18.3" to true else "1.18.3-SNAPSHOT" to false
+        val clean = git.status().isClean || System.getenv("CI") != null
+        if (!clean) {
+            logger.lifecycle("Git state is dirty, version is a snapshot.")
         }
-    } catch (e: Exception) {
-        return "1.18.3" to true
+
+        return if (headTag != null && clean) headTag.name to true else "${git.head().id}-SNAPSHOT" to false
     }
 }
