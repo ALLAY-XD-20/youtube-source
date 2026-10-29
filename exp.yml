@@ -8,9 +8,8 @@
 lavalink:
   plugins:
     # YouTube Source Plugin 1.18.3
-    - dependency: "dev.lavalink.youtube:youtube-plugin:1.18.3"
-      repository: "https://maven.lavalink.dev/releases"
-      snapshot: false
+    - dependency: "com.github.ALLAY-XD-20.youtube-source:youtube-plugin:1.18.3"
+      repository: "https://jitpack.io"
 
   server:
     sources:
