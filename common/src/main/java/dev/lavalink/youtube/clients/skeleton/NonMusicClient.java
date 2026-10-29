@@ -133,9 +133,14 @@ public abstract class NonMusicClient implements Client {
 
         // For embedded clients, fetch and include encryptedHostFlags to avoid playback restrictions.
         if (isEmbedded()) {
-            String encryptedHostFlags = fetchEncryptedHostFlags(videoId);
-            if (encryptedHostFlags != null) {
-                config.withEncryptedHostFlags(encryptedHostFlags);
+            EmbedConfig embedConfig = fetchEmbedConfig(httpInterface, videoId);
+            if (embedConfig != null) {
+                if (embedConfig.encryptedHostFlags != null) {
+                    config.withEncryptedHostFlags(embedConfig.encryptedHostFlags);
+                }
+                if ("WEB_EMBEDDED_PLAYER".equals(getIdentifier()) && embedConfig.visitorData != null) {
+                    config.withVisitorData(embedConfig.visitorData);
+                }
             }
         }
 
@@ -165,7 +170,7 @@ public abstract class NonMusicClient implements Client {
             // All other branches should've been caught by getPlayabilityStatus().
             // An exception will be thrown if we can't handle it.
             if (playabilityStatus == PlayabilityStatus.NON_EMBEDDABLE) {
-                if (isEmbedded()) {
+                if (isEmbedded() && "WEB_EMBEDDED_PLAYER".equals(getIdentifier())) {
                     throw new FriendlyException("Loading information for video failed", Severity.COMMON,
                         new RuntimeException("Non-embeddable video cannot be loaded by embedded client"));
                 }
@@ -193,6 +198,54 @@ public abstract class NonMusicClient implements Client {
         return json;
     }
 
+    public static class EmbedConfig {
+        public final String encryptedHostFlags;
+        public final String visitorData;
+
+        public EmbedConfig(String encryptedHostFlags, String visitorData) {
+            this.encryptedHostFlags = encryptedHostFlags;
+            this.visitorData = visitorData;
+        }
+    }
+
+    /**
+     * Fetches embed configuration (encryptedHostFlags and VISITOR_DATA) from the YouTube embed page.
+     * This is required for embedded clients to avoid playback restrictions.
+     */
+    @Nullable
+    protected EmbedConfig fetchEmbedConfig(@NotNull HttpInterface httpInterface, @NotNull String videoId) {
+        String embedUrl = "https://www.youtube.com/embed/" + videoId;
+        HttpGet request = new HttpGet(embedUrl);
+        request.setHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36");
+        request.setHeader("Referer", "https://www.google.com");
+
+        try (CloseableHttpResponse response = httpInterface.execute(request)) {
+            if (response.getStatusLine().getStatusCode() == 200 && response.getEntity() != null) {
+                String html = EntityUtils.toString(response.getEntity(), StandardCharsets.UTF_8);
+
+                String flags = null;
+                Matcher flagsMatcher = Pattern.compile("\"encryptedHostFlags\":\"([^\"]+)\"").matcher(html);
+                if (flagsMatcher.find()) {
+                    flags = flagsMatcher.group(1);
+                }
+
+                String visitorData = null;
+                Matcher visitorMatcher = Pattern.compile("\"VISITOR_DATA\":\"([^\"]+)\"").matcher(html);
+                if (visitorMatcher.find()) {
+                    visitorData = visitorMatcher.group(1);
+                }
+
+                if (flags != null || visitorData != null) {
+                    return new EmbedConfig(flags, visitorData);
+                }
+            }
+        } catch (Exception e) {
+            log.debug("Failed to fetch embed config for video {}", videoId, e);
+        }
+
+        return null;
+    }
+
     /**
      * Fetches the encryptedHostFlags from the YouTube embed page.
      * This is required for embedded clients to avoid playback restrictions.
@@ -206,18 +259,21 @@ public abstract class NonMusicClient implements Client {
 
         try (CloseableHttpClient httpClient = HttpClients.createDefault()) {
             HttpGet request = new HttpGet(embedUrl);
-            request.setHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
+            request.setHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36");
+            request.setHeader("Referer", "https://www.google.com");
 
             HttpResponse response = httpClient.execute(request);
-            String html = EntityUtils.toString(response.getEntity(), StandardCharsets.UTF_8);
+            if (response.getEntity() != null) {
+                String html = EntityUtils.toString(response.getEntity(), StandardCharsets.UTF_8);
 
-            Pattern pattern = Pattern.compile("\"encryptedHostFlags\":\"([^\"]+)\"");
-            Matcher matcher = pattern.matcher(html);
+                Pattern pattern = Pattern.compile("\"encryptedHostFlags\":\"([^\"]+)\"");
+                Matcher matcher = pattern.matcher(html);
 
-            if (matcher.find()) {
-                return matcher.group(1);
+                if (matcher.find()) {
+                    return matcher.group(1);
+                }
             }
-        } catch (IOException e) {
+        } catch (Exception e) {
             log.debug("Failed to fetch encryptedHostFlags for video {}", videoId, e);
         }
 

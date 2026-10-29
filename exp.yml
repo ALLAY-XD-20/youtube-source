@@ -1,0 +1,140 @@
+#################################################################################
+#                   LAVALINK YOUTUBE-SOURCE PLUGIN CONFIGURATION                #
+#                              VERSION 1.18.3                                   #
+#                        Updated by: ALLAY-XD-20                                #
+#                    Powered by: https://RozHost.in                             #
+#################################################################################
+
+lavalink:
+  plugins:
+    # YouTube Source Plugin 1.18.3
+    - dependency: "dev.lavalink.youtube:youtube-plugin:1.18.3"
+      repository: "https://maven.lavalink.dev/releases"
+      snapshot: false
+
+  server:
+    sources:
+      # IMPORTANT: Disable Lavaplayer's built-in deprecated YouTube source
+      youtube: false
+
+plugins:
+  youtube:
+    enabled: true                  # Whether this source can be used.
+    allowSearch: true              # Allows "ytsearch:" and "ytmsearch:" searches.
+    allowDirectVideoIds: true      # Allows loading raw video IDs without full URL (e.g. dQw4w9WgXcQ).
+    allowDirectPlaylistIds: true   # Allows loading raw playlist IDs without full URL.
+
+    # -------------------------------------------------------------------------
+    # CLIENTS (Queried in order from top to bottom)
+    #
+    # SAFE CLIENT CONFIGURATION:
+    # Datacenter hosting IPs (e.g. VPS, RozHost, Hetzner, OVH) are often flagged
+    # by YouTube for WEB/MWEB with "Sign in to confirm you're not a bot" /
+    # "This video requires login".
+    #
+    # Placing mobile/TV clients (ANDROID_VR, TVHTML5_SIMPLY, IOS) FIRST ensures
+    # streams load smoothly without hitting YouTube's Web bot-wall!
+    # -------------------------------------------------------------------------
+    clients:
+      - MUSIC            # YouTube Music metadata & search (ytmsearch)
+      - ANDROID_VR       # Recommended! Bypasses web botguard restrictions on datacenter IPs
+      - TVHTML5_SIMPLY   # Smart TV player client, very reliable for video playback
+      - IOS              # Apple iOS Innertube client
+      - ANDROID          # Android client (v21.02.35)
+      - ANDROID_MUSIC    # Android YouTube Music client
+      - TV               # TV client (supports OAuth login)
+      - WEB              # Desktop web client (requires poToken or OAuth if IP is flagged)
+      - MWEB             # Mobile web client
+      - WEBEMBEDDED      # YouTube embedded player client
+
+    # -------------------------------------------------------------------------
+    # CLIENT OPTIONS (Fine-tune each individual client)
+    # -------------------------------------------------------------------------
+    clientOptions:
+      MUSIC:
+        playback: false          # MUSIC is exclusively used for searching
+        searching: true
+        videoLoading: false
+        playlistLoading: false
+      ANDROID_VR:
+        playback: true
+        videoLoading: true
+        searching: true
+        playlistLoading: true
+      TVHTML5_SIMPLY:
+        playback: true
+        videoLoading: true
+        searching: false
+        playlistLoading: false
+      IOS:
+        playback: true
+        videoLoading: true
+        searching: true
+        playlistLoading: true
+      ANDROID:
+        playback: true
+        videoLoading: true
+        searching: true
+        playlistLoading: true
+      ANDROID_MUSIC:
+        playback: true
+        videoLoading: true
+        searching: true
+        playlistLoading: false
+      TV:
+        playback: true
+        videoLoading: false
+        searching: false
+        playlistLoading: false
+      WEB:
+        playback: true
+        videoLoading: true
+        searching: true
+        playlistLoading: true
+      MWEB:
+        playback: true
+        videoLoading: true
+        searching: true
+        playlistLoading: true
+      WEBEMBEDDED:
+        playback: true
+        videoLoading: true
+        searching: false
+        playlistLoading: false
+
+    # -------------------------------------------------------------------------
+    # OAUTH 2.0 (BEST FIX FOR "Sign in to confirm you're not a bot" / "login required")
+    #
+    # When enabled:
+    # 1. Start Lavalink.
+    # 2. Look at console logs for URL (https://www.google.com/device) & code.
+    # 3. Authorize with a burner Google account.
+    # 4. Lavalink will print your refreshToken in the console.
+    # 5. Paste the refreshToken below and set skipInitialization to true!
+    # -------------------------------------------------------------------------
+    oauth:
+      enabled: false               # Set to true to enable YouTube account linking
+      # refreshToken: "PASTE_YOUR_REFRESH_TOKEN_HERE"
+      # skipInitialization: true   # Set to true once you have entered your refreshToken
+
+    # -------------------------------------------------------------------------
+    # PROOF OF ORIGIN (poToken)
+    #
+    # Required by YouTube for WEB & WEBEMBEDDED clients on flagged IPs if OAuth
+    # is not used. Generate using: https://github.com/iv-org/youtube-trusted-session-generator
+    # -------------------------------------------------------------------------
+    pot:
+      # token: "PASTE_POTOKEN_HERE"
+      # visitorData: "PASTE_VISITOR_DATA_HERE"
+
+    # -------------------------------------------------------------------------
+    # REMOTE CIPHER (Optional)
+    #
+    # If signature deciphering fails, offload deciphering to a remote yt-cipher server.
+    # -------------------------------------------------------------------------
+    remoteCipher:
+      # url: "http://localhost:8001"
+      # password: "your_secret_password"
+      # userAgent: "RozHost-Lavalink"
+
+# -# Powered by https://RozHost.in
